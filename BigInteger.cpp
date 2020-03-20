@@ -41,7 +41,6 @@ public:
     explicit operator bool() const;
 
     std::string ToString() const;
-    void CHECK(const BigInteger&, const BigInteger&);
 
 private:
     enum Sign {
@@ -55,9 +54,14 @@ private:
         GREATER
     };
 
-    enum OperandType {
+    enum SumType {
         PLUS,
         MINUS
+    };
+
+    enum DivideType {
+        DIV,
+        MOD
     };
 
     std::vector<int> bigInt;
@@ -73,12 +77,14 @@ private:
     BigInteger BuildHalf(const int&, const int&) const;
     BigInteger& BaseShift(const int&);
 
-    static BigInteger& Sum(BigInteger&, const BigInteger&, OperandType);
-    static Sign DefineSumSign(Sign&, Sign&, CompareType, OperandType);
-    static BigInteger& NaiveMultiply(BigInteger&, const BigInteger&);
-    static BigInteger Karatsuba(const BigInteger&, const BigInteger&);
+    static BigInteger& Sum(BigInteger&, const BigInteger&, SumType);
+    static Sign DefineSumSign(Sign&, Sign&, CompareType, SumType);
+    static BigInteger NaiveMultiply(BigInteger&, const BigInteger&);
+    static BigInteger Karatsuba(BigInteger&, const BigInteger&);
+    static BigInteger& Divide(BigInteger&, const BigInteger&, DivideType);
     static CompareType Compare(const BigInteger&, const BigInteger&);
     static CompareType CompareByAbs(const BigInteger&, const BigInteger&);
+
 };
 
 
@@ -163,7 +169,7 @@ std::string BigInteger::ToString() const {
 
 }
 
-BigInteger& BigInteger::Sum(BigInteger& first, const BigInteger& second, BigInteger::OperandType operand) {
+BigInteger& BigInteger::Sum(BigInteger& first, const BigInteger& second, BigInteger::SumType operand) {
     BigInteger result;
 
     Sign firstSign = first.sign;
@@ -211,16 +217,16 @@ BigInteger& BigInteger::Sum(BigInteger& first, const BigInteger& second, BigInte
 }
 
 BigInteger::Sign BigInteger::DefineSumSign(Sign& firstSign, Sign& secondSign, CompareType compare,
-                                                            BigInteger::OperandType operand) {
+                                           BigInteger::SumType operand) {
     secondSign = operand == MINUS ? (secondSign == POSITIVE ? NEGATIVE : POSITIVE) : secondSign;
     if (firstSign == secondSign) {
         return firstSign;
     }
     return compare == GREATER ? (firstSign == POSITIVE ? POSITIVE : NEGATIVE) :
-                                (firstSign == POSITIVE ? NEGATIVE : POSITIVE);
+           (firstSign == POSITIVE ? NEGATIVE : POSITIVE);
 }
 
-BigInteger& BigInteger::NaiveMultiply(BigInteger& first, const BigInteger& second) {
+BigInteger BigInteger::NaiveMultiply(BigInteger& first, const BigInteger& second) {
     BigInteger result;
     result.sign = first.sign == second.sign ? POSITIVE : NEGATIVE;
 
@@ -243,20 +249,20 @@ BigInteger& BigInteger::NaiveMultiply(BigInteger& first, const BigInteger& secon
         }
         result.bigInt[i+secondSize] += baseOverFlow;
     }
-    first = result;
-    first.ToNormalState();
-    return first;
+    result.ToNormalState();
+    return result;
 }
 
-BigInteger BigInteger::Karatsuba(const BigInteger& first, const BigInteger& second) {
+BigInteger BigInteger::Karatsuba(BigInteger& first, const BigInteger& second) {
     int size = std::max(first.bigInt.size(), second.bigInt.size());
     if (first == BigInteger() || second == BigInteger()) {
         return BigInteger();
     }
-    if (size == 1) {
-        return first.bigInt[0] * second.bigInt[0];
+    if (size <= 128) {
+        return NaiveMultiply(first, second);
     }
-    int halfSize = size / 2;
+    size += size % 2;
+    int halfSize = size / 2 + size % 2;
     BigInteger tmpFirst = first;
     BigInteger tmpSecond = second;
     tmpFirst.bigInt.resize(size, 0);
@@ -268,17 +274,18 @@ BigInteger BigInteger::Karatsuba(const BigInteger& first, const BigInteger& seco
     BigInteger secondL = tmpSecond.BuildHalf(halfSize, size);
     BigInteger secondR = tmpSecond.BuildHalf(0, halfSize);
 
-    BigInteger firstProduct = Karatsuba(firstL, secondL).BaseShift(size);
+    BigInteger firstProduct = Karatsuba(firstL, secondL);
     BigInteger secondProduct = Karatsuba(firstR, secondR);
-    BigInteger thirdProduct = (Karatsuba(firstL + firstR, secondL + secondR) -
-                               firstProduct - secondProduct).BaseShift(size - halfSize);
+    BigInteger thirdProduct = Karatsuba(firstL += firstR, secondL += secondR) - firstProduct - secondProduct;
 
 
-    return firstProduct + secondProduct + thirdProduct;
+    return firstProduct.BaseShift(size) + secondProduct + thirdProduct.BaseShift(size - halfSize);
 }
 
 BigInteger BigInteger::BuildHalf(const int& start, const int& end) const {
     BigInteger result;
+    result.sign = sign;
+    result.bigInt.clear();
     for (int i = start; i < end; ++i) {
         result.bigInt.push_back(bigInt[i]);
     }
@@ -287,12 +294,50 @@ BigInteger BigInteger::BuildHalf(const int& start, const int& end) const {
 
 BigInteger& BigInteger::BaseShift(const int& power) {
     BigInteger temporaryNumber;
-    int size = this->bigInt.size();
+    temporaryNumber.bigInt.clear();
+    temporaryNumber.sign = sign;
+    int size = bigInt.size() + power;
     for (int i = 0; i < size; ++i) {
-        temporaryNumber.bigInt.push_back(i < power ? 0 : this->bigInt[i-power]);
+        temporaryNumber.bigInt.push_back(i < power ? 0 : bigInt[i-power]);
     }
     *this = temporaryNumber;
     return *this;
+}
+
+BigInteger& BigInteger::Divide(BigInteger& first, const BigInteger& second, DivideType type) {
+    if (second == 0) {
+        std::cerr << "Division by zero" << std::endl;
+    }
+    BigInteger result;
+    result.sign = first.sign == second.sign ? POSITIVE : NEGATIVE;
+
+    BigInteger divident = first;
+    divident.sign = POSITIVE;
+
+    BigInteger divisor = second;
+    divisor.sign = POSITIVE;
+
+    BigInteger baseShift;
+
+    while (divident >= divisor) {
+        baseShift = 1;
+        while (divident >= divisor * base) {
+            divisor *= base;
+            baseShift *= base;
+        }
+
+        while (divident >= divisor) {
+            divident -= divisor;
+            result += baseShift;
+        }
+
+        divisor = second;
+        divisor.sign = POSITIVE;
+    }
+    divident.ToNormalState();
+    result.ToNormalState();
+    first = type == DIV ? result : divident;
+    return first;
 }
 
 BigInteger::CompareType BigInteger::Compare(const BigInteger& first, const BigInteger& second) {
@@ -316,7 +361,7 @@ BigInteger::CompareType BigInteger::CompareByAbs(const BigInteger& first, const 
         return LOWER;
     }
     int size = first.bigInt.size();
-    for (int i = 0; i < size; ++i) {
+    for (int i = size - 1; i >= 0; --i) {
         if (first.bigInt[i] > second.bigInt[i]) {
             return GREATER;
         } else if (first.bigInt[i] < second.bigInt[i]) {
@@ -406,7 +451,7 @@ BigInteger& operator+=(BigInteger& first, const BigInteger& second) {
 }
 
 BigInteger& operator-=(BigInteger& first, const BigInteger& second) {
-    return BigInteger::Sum(first, second, BigInteger::PLUS);
+    return BigInteger::Sum(first, second, BigInteger::MINUS);
 }
 
 BigInteger& operator*=(BigInteger& first, const BigInteger& second) {
@@ -415,9 +460,11 @@ BigInteger& operator*=(BigInteger& first, const BigInteger& second) {
 }
 
 BigInteger& operator/=(BigInteger& first, const BigInteger& second) {
+    return BigInteger::Divide(first, second, BigInteger::DIV);
 }
 
 BigInteger& operator%=(BigInteger& first, const BigInteger& second) {
+    return BigInteger::Divide(first, second, BigInteger::MOD);
 }
 
 BigInteger operator+(const BigInteger& first, const BigInteger& second) {
@@ -435,17 +482,28 @@ BigInteger operator*(const BigInteger& first, const BigInteger& second) {
     return result *= second;
 }
 
-BigInteger operator/(const BigInteger&, const BigInteger&);
+BigInteger operator/(const BigInteger& first, const BigInteger& second) {
+    BigInteger result = first;
+    return result /= second;
+}
 
-BigInteger operator%(const BigInteger&, const BigInteger&);
+BigInteger operator%(const BigInteger& first, const BigInteger& second) {
+    BigInteger result = first;
+    return result %= second;
+}
+
+BigInteger::operator bool() const {
+    return (*this) != 0;
+}
 
 int main() {
-    BigInteger a,b;
+    BigInteger a,b,c;
     std::cin >> a;
     std::cin >> b;
     std::cout << a << std::endl;
     std::cout << b << std::endl;
-    std::cout << (a *= b) << std::endl;
+    std::cout << (a / b) << std::endl;
+    std::cout << (a % b) << std::endl;
 
     return 0;
 }
